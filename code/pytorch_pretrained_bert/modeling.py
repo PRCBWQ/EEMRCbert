@@ -27,6 +27,9 @@ import shutil
 import tarfile
 import tempfile
 import sys
+# Note for python3
+if sys.version_info[0] >= 3:
+    unicode = str
 from io import open
 
 import torch
