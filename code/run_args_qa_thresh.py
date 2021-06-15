@@ -391,7 +391,7 @@ def evaluate(args, model, device, eval_dataloader, eval_examples, gold_examples,
     for (example_id, _) in enumerate(gold_examples):
         pred_arg = preds[example_id]
         gold_arg = all_gold[example_id]
-        for argument in pred_arg:
+        for argument in pred_arg: # 某一句子的所有arguement的可能
             argument.append(example_id)
             new_preds.append(argument)
         for argument in gold_arg:

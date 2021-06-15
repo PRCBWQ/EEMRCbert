@@ -286,7 +286,7 @@ def evaluate(args, eval_examples, category_vocab, model, device, eval_dataloader
         for trigger in pred_sentence_triggers: pred_trigger_n += 1
         # for gold_trigger_n     
         for trigger in gold_sentence_triggers: gold_trigger_n += 1
-        # for true_positive_n
+        # for true_positive_n=
         for trigger in pred_sentence_triggers:
             if trigger in gold_sentence_triggers:
                 true_positive_n += 1
