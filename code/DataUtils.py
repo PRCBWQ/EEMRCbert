@@ -1,23 +1,28 @@
 import json
+import os
+
 from transformers import BertTokenizerFast
 from config import ROOT_PATH, MODE_PATH, DATA_PATH, KEYOFFEST, KEYTOKENID, KEYTYPE, KEYMASK, KEYTRIGLABEL, CONFIG_NAME, \
-    WEIGHTS_NAME,candidate_queries
+    WEIGHTS_NAME, candidate_queries
 from collections import Counter
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import torch.optim as optim
+
+
 class Event_category_vocab(object):
     """docstring for trigger_category_vocab"""
 
     def __init__(self):
         self.category_to_index = dict()
         self.index_to_category = dict()
-        self.Eventcounter = Counter()
-        self.Rolecounter = Counter()
         self.max_sent_length = 0
-        self.eventRoledic = dict()
-        self.totalRoledic = dict()
-        self.trigerWords = list()
+
+        self.eventRoledic = dict()  # the role in a kind of event
+        self.totalRoledic = dict()  # the count of each role
+        self.Eventcounter = Counter()  # the count of each category
+        self.triggerWords = dict()  # the triggerWords of each kind event has
+
     def create_vocab(self, files_list, tokenizer: BertTokenizerFast):
         self.category_to_index["None"] = 0
         self.index_to_category[0] = "None"
@@ -32,20 +37,21 @@ class Event_category_vocab(object):
                         self.max_sent_length = lentok
                     for event in events:
                         event_type = event["event_type"]
+                        self.Eventcounter["total"] += 1
                         self.Eventcounter[event_type] += 1
                         if event_type not in self.category_to_index:
                             index = len(self.index_to_category)
                             self.category_to_index[event_type] = index
                             self.index_to_category[index] = event_type
                             self.eventRoledic[event_type] = dict()
-                            self.trigerWords.append(dict())
+                            self.triggerWords[index] = dict()
                         if "trigger" in event:
                             index = self.category_to_index[event_type]
                             word = event["trigger"]["text"]
-                            if word in self.trigerWords[index]:
-                                self.trigerWords[index][word] = self.trigerWords[index][word] + 1
+                            if word in self.triggerWords[index]:
+                                self.triggerWords[index][word] = self.triggerWords[index][word] + 1
                             else:
-                                self.trigerWords[index][word] = 1
+                                self.triggerWords[index][word] = 1
                         if "arguments" not in event:
                             continue
                         arguments = event["arguments"]
@@ -61,6 +67,22 @@ class Event_category_vocab(object):
                                 self.totalRoledic[role] += 1
         # add [CLS] and query
         self.max_sent_length += 12
+
+    def save_result(self, output="Statistic/"):
+        if not os.path.isdir(DATA_PATH + output):
+            os.mkdir(DATA_PATH + output)
+        with open(DATA_PATH + output + "_category.json", "w", encoding='utf-8') as f:
+            json.dump(self.category_to_index, f, indent=4, ensure_ascii=False)  # File use dump and Main Memory us dumps
+        with open(DATA_PATH + output + "_trigger.json", "w", encoding='utf-8') as f:
+            json.dump(self.triggerWords, f, indent=4, ensure_ascii=False)
+        with open(DATA_PATH + output + "_Role.json", "w", encoding='utf-8') as f:
+            json.dump(self.eventRoledic, f, indent=4, ensure_ascii=False)
+        with open(DATA_PATH + output + "_totalRole.json", "w", encoding='utf-8') as f:
+            json.dump(self.totalRoledic, f, indent=4, ensure_ascii=False)
+        with open(DATA_PATH + output + "_totalEvent.json", "w", encoding='utf-8') as f:
+            json.dump(self.Eventcounter, f, indent=4, ensure_ascii=False)
+
+
 def getTokenIndex(offsetList: list, probindex, start, end):
     if probindex >= offsetList[end][1]:
         return -1
@@ -74,7 +96,9 @@ def getTokenIndex(offsetList: list, probindex, start, end):
         elif offsetList[mid][0] > probindex:
             end = mid - 1
     return end
-def getsepandlen(token_type_ids:list):
+
+
+def getsepandlen(token_type_ids: list):
     tokenlen = len(token_type_ids)
     i = 0
     while i < tokenlen:
@@ -86,10 +110,11 @@ def getsepandlen(token_type_ids:list):
         if token_type_ids[i] == 0:
             break
         i += 1
-    setlen = i-1
+    setlen = i - 1
     return sepindex, setlen
 
-def read_ACE_toTrigExamples(nth_query,input_file, tokenizer: BertTokenizerFast, category_vocab: Event_category_vocab):
+
+def read_ACE_toTrigExamples(nth_query, input_file, tokenizer: BertTokenizerFast, category_vocab: Event_category_vocab):
     reswithAns = []
     features = []
     with open(input_file, "r", encoding='utf-8') as f:
@@ -105,10 +130,14 @@ def read_ACE_toTrigExamples(nth_query,input_file, tokenizer: BertTokenizerFast, 
             query = seq.join(candidate_queries[nth_query])
             # sen_code = tokenizer(sentence, query, return_offsets_mapping=True, return_tensors="pt")
             # 要求补齐
-            sen_code = tokenizer(query, sentence, return_offsets_mapping=True,
+            sen_code = tokenizer(query, sentence, return_offsets_mapping=True, add_special_tokens=True,
                                  max_length=category_vocab.max_sent_length,
                                  padding='max_length', truncation=True)
-            sepindex, seglen = getsepandlen(sen_code[KEYTYPE])
+            sen_code['senlist'] = tokenizer.tokenize(query,sentence, add_special_tokens=True)
+            # print(sen_code['senlist'])
+            sepindex, seglen = getsepandlen(sen_code[KEYTYPE]) #[sep] index
+            # print("sepindex:"+str(sepindex))
+            # print("seglen:"+str(seglen))
             tempdict["orisen"] = sentence
             # tempdict["sentence"] =
             tempdict["sepindex"] = sepindex
@@ -128,8 +157,8 @@ def read_ACE_toTrigExamples(nth_query,input_file, tokenizer: BertTokenizerFast, 
                     for arg in event["arguments"]:
                         probstart = arg["start"]
                         probend = arg["end"] - 1  # 闭区间
-                        tokenstart = getTokenIndex(sen_code[KEYOFFEST], probstart, sepindex+1, seglen)
-                        tokenend = getTokenIndex(sen_code[KEYOFFEST], probend, sepindex+1, seglen)
+                        tokenstart = getTokenIndex(sen_code[KEYOFFEST], probstart, sepindex + 1, seglen-1)
+                        tokenend = getTokenIndex(sen_code[KEYOFFEST], probend, sepindex + 1, seglen-1)
                         tempdict["events"][i]["arguments"][j]["tokenstart"] = tokenstart
                         tempdict["events"][i]["arguments"][j]["tokenend"] = tokenend
 
@@ -140,10 +169,12 @@ def read_ACE_toTrigExamples(nth_query,input_file, tokenizer: BertTokenizerFast, 
                     arg = event["trigger"]
                     probstart = arg["start"]
                     probend = arg["end"] - 1  # 闭区间
-                    tokenstart = getTokenIndex(sen_code[KEYOFFEST], probstart, sepindex+1, seglen)
-                    tokenend = getTokenIndex(sen_code[KEYOFFEST], probend, sepindex+1, seglen)
+                    tokenstart = getTokenIndex(sen_code[KEYOFFEST], probstart, sepindex + 1, seglen-1)
+                    tokenend = getTokenIndex(sen_code[KEYOFFEST], probend, sepindex + 1, seglen-1)
                     tempdict["events"][i]["trigger"]["tokenstart"] = tokenstart
                     tempdict["events"][i]["trigger"]["tokenend"] = tokenend
+                    # print("tokenstart:"+str(tokenstart))
+                    # print("tokenend:" + str(tokenend))
                     if 'event_type' in event:
                         caID = category_vocab.category_to_index[event["event_type"]]
                         for ac in range(tokenstart, tokenend + 1):
@@ -160,6 +191,8 @@ def read_ACE_toTrigExamples(nth_query,input_file, tokenizer: BertTokenizerFast, 
             sentence_id += 1
             reswithAns.append(tempdict)
     return reswithAns
+
+
 def loadReswithAns(reswithAns, batch_size=32):
     all_sentence_id = torch.tensor([f["id"] for f in reswithAns], dtype=torch.long)
     all_input_ids = torch.tensor([f["token"][KEYTOKENID] for f in reswithAns], dtype=torch.long)
@@ -171,3 +204,19 @@ def loadReswithAns(reswithAns, batch_size=32):
                              all_labels)
     all_dataloader = DataLoader(all_data, batch_size=batch_size)
     return all_dataloader
+
+
+if __name__ == "__main__":
+    filelist = [DATA_PATH + "ch\dev.json", DATA_PATH + r"ch\test.json", DATA_PATH + r"ch\train.json"]
+    tokenizer = BertTokenizerFast.from_pretrained(MODE_PATH + "bert_base_uncased/", do_lower_case=True)
+    category_vocab = Event_category_vocab()
+    category_vocab.create_vocab(filelist, tokenizer)
+    # category_vocab.save_result()
+    res = read_ACE_toTrigExamples(1, DATA_PATH + "sample.json", tokenizer, category_vocab)
+    print("#################################")
+    for temp in res:
+        print(temp['token'][KEYOFFEST])
+        print(temp['token'][KEYTOKENID])
+        print(temp['token'][KEYTYPE])
+        print(temp['token'][KEYMASK])
+        print(temp['token'][KEYTRIGLABEL])
